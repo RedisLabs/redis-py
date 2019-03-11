@@ -5,7 +5,6 @@ import sys
 import warnings
 import time
 import threading
-import socket
 import time as mod_time
 from redis._compat import (b, basestring, bytes, imap, iteritems, iterkeys,
                            itervalues, izip, long, nativestr, unicode,
@@ -2075,7 +2074,6 @@ class PubSub(object):
         self.shard_hint = shard_hint
         self.ignore_subscribe_messages = ignore_subscribe_messages
         self.connection = None
-        self._abort = False
         # we need to know the encoding options for this connection in order
         # to lookup channel and pattern names for callback handlers.
         conn = connection_pool.get_connection('pubsub', shard_hint)
@@ -2107,12 +2105,6 @@ class PubSub(object):
 
     def close(self):
         self.reset()
-
-    # Hack to enable aborting a thread blocking on reading from the pubsub socket
-    def abort(self):
-        self._abort = True
-        if self.connection and self.connection._sock:
-            self.connection._sock.shutdown(socket.SHUT_RDWR)
 
     def on_connect(self, connection):
         "Re-subscribe to any channels and patterns previously subscribed to"
@@ -2173,8 +2165,6 @@ class PubSub(object):
             return command(*args)
         except (ConnectionError, TimeoutError) as e:
             connection.disconnect()
-            if self._abort:
-                return None
             if not connection.retry_on_timeout and isinstance(e, TimeoutError):
                 raise
             # Connect manually here. If the Redis server is down, this will
@@ -2254,10 +2244,8 @@ class PubSub(object):
 
     def listen(self):
         "Listen for messages on channels this client has been subscribed to"
-        while self.subscribed and not self._abort:
-            response = self.parse_response(block=True)
-            if response is None: continue
-            response = self.handle_message(response)
+        while self.subscribed:
+            response = self.handle_message(self.parse_response(block=True))
             if response is not None:
                 yield response
 
